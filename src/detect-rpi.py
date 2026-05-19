@@ -17,24 +17,28 @@ except Exception:
 
 # File configuration
 JSON = os.path.join(os.path.dirname(__file__), "../res/detected.json")
+# Tambahkan file log CSV untuk data latensi riset laporan ZEUS
+CSV_LOG = os.path.join(os.path.dirname(__file__), "../res/latency_log.csv")
+
 Path(os.path.dirname(JSON)).mkdir(parents=True, exist_ok=True)
 REQ_TIME = 5.0
 
-# Load model
-model = YOLO("../model/best.onnx").to("cpu")  # Pastikan model di-load ke CPU untuk kompatibilitas ONNX
+# 🛠️ PERBAIKAN 1: Hapus .to("cpu") di sini, kita akan paksa device="cpu" langsung di fungsi inferensi
+model = YOLO("../model/best.onnx")  
 class_names = model.names
 print("✅ Model loaded: model/best.onnx")
 print(f"📋 Class names: {class_names}")
 print(f"📊 Total classes: {len(class_names)}")
 
+# Tulis header CSV jika file belum ada
+if not os.path.exists(CSV_LOG):
+    with open(CSV_LOG, "w") as f:
+        f.write("timestamp,latency_ms,inference_fps\n")
+
 app = typer.Typer(help="YOLO detection on webcam using pure OpenCV rendering")
 
 def save_detections(class_name: str):
-    """
-    Simpan deteksi ke file JSON dengan timestamp.
-    """
     from datetime import datetime
-    
     detections = []
     if os.path.exists(JSON):
         try:
@@ -87,11 +91,9 @@ def process(source: str, conf_threshold: float = 0.6, required_time: float = REQ
         print(f"Error: Could not open source '{source}'.")
         return
 
-    # Set resolusi kamera biar enteng di RPi 5
+    # Set resolusi kamera default
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    
-    # Hitung luas total frame untuk membatasi bounding box raksasa
     frame_area = 640 * 480 
 
     try:
@@ -103,17 +105,32 @@ def process(source: str, conf_threshold: float = 0.6, required_time: float = REQ
 
             annotated_frame = frame.copy()
 
-            # Jalankan inferensi (imgsz di-set ke 320 agar FPS melonjak tinggi di RPi 5)
-            results = model(frame, conf=conf_threshold, imgsz=320, verbose=False)[0]
+            # 🛠️ PERBAIKAN 2: Tambahkan device="cpu" SECARA EKSPLISIT di sini untuk membungkam warning CUDA.
+            # Catatan: Jika model ONNX kamu masih rewel soal dimensi (error index 2 got 320 expected 640), 
+            # ganti imgsz=320 di bawah ini menjadi imgsz=640 atau gunakan file ONNX yang sudah di-export ulang ke 320.
             
+            start_time = time.perf_counter() # Mulai hitung latensi
+            
+            results_list = model(frame, conf=conf_threshold, imgsz=320, device="cpu", verbose=False)
+            results = results_list[0]
+            
+            end_time = time.perf_counter() # Selesai hitung latensi
+            
+            # 📊 LOGIKA LATENSI UNTUK RISET KALIBRASI
+            latency_ms = (end_time - start_time) * 1000
+            inf_fps = 1000 / latency_ms if latency_ms > 0 else 0
+            
+            # Simpan data latensi ke file CSV secara real-time
+            with open(CSV_LOG, "a") as f:
+                f.write(f"{time.time()},{latency_ms:.2f},{inf_fps:.1f}\n")
+
             boxes = results.boxes.xyxy.cpu().numpy()  
             scores = results.boxes.conf.cpu().numpy() 
             clss = results.boxes.cls.cpu().numpy()   
             
             if debug and len(boxes) > 0:
-                print(f"[DEBUG] Detections found: {len(boxes)} | Conf threshold: {conf_threshold}")
+                print(f"[DEBUG] Detections found: {len(boxes)} | Latency: {latency_ms:.1f}ms")
 
-            # Set untuk mencatat objek apa saja yang terlihat DI FRAME INI
             current_frame_classes = set()
 
             for box, score, cls in zip(boxes, scores, clss):
@@ -122,14 +139,12 @@ def process(source: str, conf_threshold: float = 0.6, required_time: float = REQ
                 
                 class_name = class_names.get(class_id, str(class_id)) if isinstance(class_names, dict) else class_names[class_id]
 
-                # 🛡️ FIX 1: JALANIN FILTER KOTAK RAKSASA
+                # Filter Kotak Raksasa
                 box_width = x2 - x1
                 box_height = y2 - y1
                 box_area = box_width * box_height
                 if box_area > (0.70 * frame_area):
-                    if debug:
-                        print(f"[FILTERED] Diabaikan karena box terlalu besar ({box_area} px)")
-                    continue  # Lewati kotak liar ini
+                    continue  
 
                 current_frame_classes.add(class_name)
 
@@ -163,18 +178,20 @@ def process(source: str, conf_threshold: float = 0.6, required_time: float = REQ
                         if serial_conn and send_category:
                             serial_conn.send_trigger(send_category)
 
-            # 🛡️ FIX 2: RESET TIMER UNTUK OBJEK YANG HILANG DARI FRAME
-            # Jika objek sebelumnya ada di timer tapi sekarang tidak terdeteksi lagi, hapus dari catatan
+            # Reset Timer untuk Objek yang Hilang
             for active_class in list(object_timers.keys()):
                 if active_class not in current_frame_classes:
                     del object_timers[active_class]
+
+            # 🛠️ PERBAIKAN 3: Tampilkan info Latensi Riset langsung di Layar Video (Warna Kuning Taktis)
+            cv2.putText(annotated_frame, f"Latency: {latency_ms:.1f} ms", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(annotated_frame, f"Model FPS: {inf_fps:.1f}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
 
             cv2.imshow("ZEUS Live Cam - YOLO Manual Render", annotated_frame)
 
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
     finally:
-        # 🛡️ FIX 3: Amankan proses penutupan resource
         print("Cleaning up resources...")
         cap.release()
         cv2.destroyAllWindows()
@@ -183,8 +200,8 @@ def process(source: str, conf_threshold: float = 0.6, required_time: float = REQ
 
 @app.command()
 def webcam(
-    source: str = typer.Option("0", "--source"), # RPi biasanya pakai '0' untuk default video node
-    conf: float = typer.Option(0.55, "--conf", "-c"), # FIX 4: Naikkan default ke 55% biar ga paranoid
+    source: str = typer.Option("0", "--source"), 
+    conf: float = typer.Option(0.55, "--conf", "-c"), 
     req_time: float = typer.Option(5.0, "--req-time"),
     serial_enable: bool = typer.Option(False, "--serial"),
     serial_port: str = typer.Option('/dev/ttyUSB0', "--serial-port"),
