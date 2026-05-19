@@ -4,7 +4,7 @@ from ultralytics import YOLO
 
 # 1. Muat model .pt hasil training kamu (Awalnya masuk ke GPU jika ada)
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # Paksa pakai GPU 0, tapi nanti kita pindahin ke CPU
-model = YOLO("ref/best.pt")
+model = YOLO("ref/default.pt")
 
 # 2. JINAKKAN KE CPU DULU (Wajib sebelum diekspor!)
 model.to("cpu")
@@ -14,6 +14,6 @@ exported_path = model.export(format="onnx", imgsz=640, device="cpu", verbose=Fal
 
 # 4. Trik pindahin manual ke folder 'model' biar gak acak-acakan bawaan YOLO
 os.makedirs("model", exist_ok=True)
-shutil.move(exported_path, "model/best_full.onnx")
+shutil.move(exported_path, "model/default.onnx")
 
 print("Dah kelar, Dan! Cek folder 'model/best_full.onnx' murni versi CPU.")
