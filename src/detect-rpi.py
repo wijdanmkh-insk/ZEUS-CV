@@ -21,8 +21,7 @@ Path(os.path.dirname(JSON)).mkdir(parents=True, exist_ok=True)
 REQ_TIME = 5.0
 
 # Load model
-model = YOLO("../model/best.onnx")
-model.to("cpu")  # Pastikan model di-load ke CPU untuk kompatibilitas ONNX
+model = YOLO("../model/best.onnx").to("cpu")  # Pastikan model di-load ke CPU untuk kompatibilitas ONNX
 class_names = model.names
 print("✅ Model loaded: model/best.onnx")
 print(f"📋 Class names: {class_names}")
