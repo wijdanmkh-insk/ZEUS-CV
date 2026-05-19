@@ -10,7 +10,7 @@ model = YOLO("ref/best.pt")
 model.to("cpu")
 
 # 3. Jalankan ekspor (Sekarang ONNX akan di-generate murni dengan binding CPU)
-exported_path = model.export(format="onnx", imgsz=320)
+exported_path = model.export(format="onnx", imgsz=640, device="cpu", verbose=False)
 
 # 4. Trik pindahin manual ke folder 'model' biar gak acak-acakan bawaan YOLO
 os.makedirs("model", exist_ok=True)
