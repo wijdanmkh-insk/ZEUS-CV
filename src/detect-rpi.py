@@ -21,9 +21,10 @@ Path(os.path.dirname(JSON)).mkdir(parents=True, exist_ok=True)
 REQ_TIME = 5.0
 
 # Load model
-model = YOLO("model/best.pt")  
+model = YOLO("model/best.onnx")
+model.to("cpu")  # Pastikan model di-load ke CPU untuk kompatibilitas ONNX
 class_names = model.names
-print("✅ Model loaded: model/best.pt")
+print("✅ Model loaded: model/best.onnx")
 print(f"📋 Class names: {class_names}")
 print(f"📊 Total classes: {len(class_names)}")
 
@@ -32,7 +33,6 @@ app = typer.Typer(help="YOLO detection on webcam using pure OpenCV rendering")
 def save_detections(class_name: str):
     """
     Simpan deteksi ke file JSON dengan timestamp.
-    Format: {"timestamp": "2026-05-15 HH:MM:SS", "class": "Organik"}
     """
     from datetime import datetime
     
@@ -44,13 +44,11 @@ def save_detections(class_name: str):
         except Exception:
             detections = []
     
-    # Tambah deteksi baru
     detections.append({
         "timestamp": datetime.now().isoformat(),
         "class": class_name
     })
     
-    # Simpan kembali
     try:
         with open(JSON, 'w') as f:
             json.dump(detections, f, indent=2)
@@ -90,98 +88,110 @@ def process(source: str, conf_threshold: float = 0.6, required_time: float = REQ
         print(f"Error: Could not open source '{source}'.")
         return
 
-    # Set resolusi kamera biar enteng (opsional, tapi bagus buat live tracking)
+    # Set resolusi kamera biar enteng di RPi 5
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    
+    # Hitung luas total frame untuk membatasi bounding box raksasa
+    frame_area = 640 * 480 
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            print("End of video or failed to grab frame.")
-            break
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                print("End of video or failed to grab frame.")
+                break
 
-        # 1. Ambil frame copy untuk tempat ngegambar box
-        annotated_frame = frame.copy()
+            annotated_frame = frame.copy()
 
-        # 2. Run inference langsung ambil objek boxes-nya
-        results = model(frame, conf=conf_threshold, verbose=False)[0]
-        
-        # Ekstrak data kotak, skor, dan class id secara manual dari tensor YOLO
-        boxes = results.boxes.xyxy.cpu().numpy()  # Koordinat [x1, y1, x2, y2]
-        scores = results.boxes.conf.cpu().numpy() # Skor confidence
-        clss = results.boxes.cls.cpu().numpy()   # ID Kelas
-        
-        # 🔍 DEBUG: Show detection count
-        if debug or len(boxes) == 0:
-            print(f"[DEBUG] Detections found: {len(boxes)} | Conf threshold: {conf_threshold}")
-
-        # 3. Gambar Bounding Box MANUAL pakai OpenCV (Anti-Bug Supervision)
-        for box, score, cls in zip(boxes, scores, clss):
-            x1, y1, x2, y2 = map(int, box)
-            class_id = int(cls)
+            # Jalankan inferensi (imgsz di-set ke 320 agar FPS melonjak tinggi di RPi 5)
+            results = model(frame, conf=conf_threshold, imgsz=320, verbose=False)[0]
             
-            # Ambil nama kelas
-            if isinstance(class_names, dict):
-                class_name = class_names.get(class_id, str(class_id))
-            else:
-                class_name = class_names[class_id]
-
-            # Set warna box (B, G, R) -> Hijau cerah buat deteksi
-            color = (0, 255, 0) 
+            boxes = results.boxes.xyxy.cpu().numpy()  
+            scores = results.boxes.conf.cpu().numpy() 
+            clss = results.boxes.cls.cpu().numpy()   
             
-            # Gambar Kotak Bounding Box
-            cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
-            
-            # Bikin teks label (Nama Kelas + Score %)
-            label = f"{class_name} {score:.2f}"
-            
-            # Gambar background teks biar kebaca
-            cv2.rectangle(annotated_frame, (x1, y1 - 20), (x1 + len(label)*10, y1), color, -1)
-            # Tulis teks label di atas kotak
-            cv2.putText(annotated_frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+            if debug and len(boxes) > 0:
+                print(f"[DEBUG] Detections found: {len(boxes)} | Conf threshold: {conf_threshold}")
 
-            # --- Logika Timer dan Serial (Tetap Berjalan Aman) ---
-            if class_name in logged_objects:
-                continue
+            # Set untuk mencatat objek apa saja yang terlihat DI FRAME INI
+            current_frame_classes = set()
 
-            if class_name not in object_timers:
-                object_timers[class_name] = time.time()
-            else:
-                elapsed_time = time.time() - object_timers[class_name]
-                if elapsed_time >= required_time:
-                    save_detections(class_name)
-                    logged_objects.add(class_name)
-                    
-                    send_category = None
-                    if class_map and class_name in class_map:
-                        send_category = class_map[class_name]
-                    else:
-                        normalized = class_name.lower().replace(' ', '_')
-                        if normalized in ("organic", "anorganic", "hazard", "paper"):
-                            send_category = normalized
+            for box, score, cls in zip(boxes, scores, clss):
+                x1, y1, x2, y2 = map(int, box)
+                class_id = int(cls)
+                
+                class_name = class_names.get(class_id, str(class_id)) if isinstance(class_names, dict) else class_names[class_id]
 
-                    if serial_conn and send_category:
-                        serial_conn.send_trigger(send_category)
+                # 🛡️ FIX 1: JALANIN FILTER KOTAK RAKSASA
+                box_width = x2 - x1
+                box_height = y2 - y1
+                box_area = box_width * box_height
+                if box_area > (0.70 * frame_area):
+                    if debug:
+                        print(f"[FILTERED] Diabaikan karena box terlalu besar ({box_area} px)")
+                    continue  # Lewati kotak liar ini
 
-        # 4. Tampilkan live stream frame yang udah digambar manual
-        cv2.imshow("ZEUS Live Cam - YOLO Manual Render", annotated_frame)
+                current_frame_classes.add(class_name)
 
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
+                # Gambar Kotak Manual
+                color = (0, 255, 0) 
+                cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
+                label = f"{class_name} {score:.2f}"
+                cv2.rectangle(annotated_frame, (x1, y1 - 20), (x1 + len(label)*10, y1), color, -1)
+                cv2.putText(annotated_frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
 
-    cap.release()
-    cv2.destroyAllWindows()
+                # Logika Timer dan Trigger Serial
+                if class_name in logged_objects:
+                    continue
+
+                if class_name not in object_timers:
+                    object_timers[class_name] = time.time()
+                else:
+                    elapsed_time = time.time() - object_timers[class_name]
+                    if elapsed_time >= required_time:
+                        save_detections(class_name)
+                        logged_objects.add(class_name)
+                        
+                        send_category = None
+                        if class_map and class_name in class_map:
+                            send_category = class_map[class_name]
+                        else:
+                            normalized = class_name.lower().replace(' ', '_')
+                            if normalized in ("organic", "anorganic", "hazard", "paper"):
+                                send_category = normalized
+
+                        if serial_conn and send_category:
+                            serial_conn.send_trigger(send_category)
+
+            # 🛡️ FIX 2: RESET TIMER UNTUK OBJEK YANG HILANG DARI FRAME
+            # Jika objek sebelumnya ada di timer tapi sekarang tidak terdeteksi lagi, hapus dari catatan
+            for active_class in list(object_timers.keys()):
+                if active_class not in current_frame_classes:
+                    del object_timers[active_class]
+
+            cv2.imshow("ZEUS Live Cam - YOLO Manual Render", annotated_frame)
+
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+    finally:
+        # 🛡️ FIX 3: Amankan proses penutupan resource
+        print("Cleaning up resources...")
+        cap.release()
+        cv2.destroyAllWindows()
+        if serial_conn and hasattr(serial_conn, 'close'):
+            serial_conn.close()
 
 @app.command()
 def webcam(
-    source: str = typer.Option("1", "--source"),
-    conf: float = typer.Option(0.15, "--conf", "-c"), # Gw turunin default ke 15% biar sensitif
+    source: str = typer.Option("0", "--source"), # RPi biasanya pakai '0' untuk default video node
+    conf: float = typer.Option(0.55, "--conf", "-c"), # FIX 4: Naikkan default ke 55% biar ga paranoid
     req_time: float = typer.Option(5.0, "--req-time"),
     serial_enable: bool = typer.Option(False, "--serial"),
     serial_port: str = typer.Option('/dev/ttyUSB0', "--serial-port"),
     baudrate: int = typer.Option(115200, "--baud"),
     serial_map: str | None = typer.Option(None, "--serial-map"),
-    debug: bool = typer.Option(False, "--debug", "-d", help="Show detection debug info"),
+    debug: bool = typer.Option(False, "--debug", "-d"),
 ):
     typer.echo(f"Starting ZEUS Manual Render | Source: {source} | Conf: {conf}")
     process(source, conf, req_time, serial_enable, serial_port, baudrate, serial_map, debug)
