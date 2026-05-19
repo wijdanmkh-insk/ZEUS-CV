@@ -2,3 +2,9 @@
 .venv/
 *.onnx
 *.pt
+src/__pycache__/
+src/dataset_sampah
+/__pycache__/
+/datasets
+/ref
+/res
