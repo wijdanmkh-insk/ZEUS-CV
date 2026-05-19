@@ -10,10 +10,10 @@ model = YOLO("ref/best.pt")
 model.to("cpu")
 
 # 3. Jalankan ekspor (Sekarang ONNX akan di-generate murni dengan binding CPU)
-exported_path = model.export(format="onnx", imgsz=320, half=True, simplify=True)
+exported_path = model.export(format="onnx", imgsz=320)
 
 # 4. Trik pindahin manual ke folder 'model' biar gak acak-acakan bawaan YOLO
 os.makedirs("model", exist_ok=True)
-shutil.move(exported_path, "model/best.onnx")
+shutil.move(exported_path, "model/best_full.onnx")
 
-print("Dah kelar, Dan! Cek folder 'model/best.onnx' murni versi CPU.")
+print("Dah kelar, Dan! Cek folder 'model/best_full.onnx' murni versi CPU.")
