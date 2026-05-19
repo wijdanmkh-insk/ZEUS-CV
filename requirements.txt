@@ -1,3 +1,5 @@
+--find-links https://download.pytorch.org/whl/cpu
+
 annotated-doc==0.0.4
 certifi==2026.4.22
 charset-normalizer==3.4.7

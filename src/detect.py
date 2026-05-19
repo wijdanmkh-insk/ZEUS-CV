@@ -21,12 +21,11 @@ Path(os.path.dirname(JSON)).mkdir(parents=True, exist_ok=True)
 REQ_TIME = 5.0
 
 # Load model
-model = YOLO("model/best.pt")  
+model = YOLO("ref/best.pt")  
 class_names = model.names
-print("✅ Model loaded: model/best.pt")
+print("✅ Model loaded: ref/best.pt")
 print(f"📋 Class names: {class_names}")
 print(f"📊 Total classes: {len(class_names)}")
-
 app = typer.Typer(help="YOLO detection on webcam using pure OpenCV rendering")
 
 def save_detections(class_name: str):
