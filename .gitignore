@@ -1,6 +1,5 @@
 *.mp4
 .venv/
-*.onnx
 *.pt
 src/__pycache__/
 src/dataset_sampah
