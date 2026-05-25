@@ -29,7 +29,7 @@ JSON = os.path.join(os.path.dirname(__file__), "../res/detected.json")
 CSV_LOG = os.path.join(os.path.dirname(__file__), "../res/latency_log.csv")
 
 Path(os.path.dirname(JSON)).mkdir(parents=True, exist_ok=True)
-REQ_TIME = 3.0
+REQ_TIME = 2.0
 
 # Inisialisasi Model
 model = YOLO("./model/rpi.onnx")  
