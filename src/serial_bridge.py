@@ -7,52 +7,87 @@ except Exception as e:
 
 
 class ZeusSerial:
-    def __init__(self, port='/dev/ttyUSB0', baudrate=9600):
+    """
+    Serial bridge antara Raspberry Pi (Python) dan MCU (Arduino).
+    Mengirim trigger byte berdasarkan kategori sampah yang terdeteksi YOLO.
+    """
+
+    # =========================================================================
+    # Mapping kategori YOLO → byte perintah Arduino
+    # PENTING: semua key HARUS lowercase agar cocok dengan hasil .lower()
+    # =========================================================================
+    CATEGORY_MAP = {
+        # Anorganic dan sub-kelasnya → 'W'
+        "anorganic":     b'W',
+        "anorganic_wet": b'W',
+        "anorganic_dry": b'W',
+        "w":             b'W',
+
+        # Organic → 'O'
+        "organic": b'O',
+        "o":       b'O',
+
+        # Paper → 'P'
+        "paper": b'P',
+        "p":     b'P',
+
+        # Hazard (belum ada posisi servo, default ke anorganic dulu)
+        "hazard": b'W',
+    }
+
+    def __init__(self, port: str = '/dev/ttyUSB0', baudrate: int = 115200):
         self.ser = None
+
         if _pyserial is None:
-            print("❌ pyserial not available (install with 'pip install pyserial')")
+            print("❌ pyserial tidak tersedia. Install dengan: pip install pyserial")
             return
 
         try:
-            # Menggunakan timeout agar fungsi write/read tidak membuat program utama hang
             self.ser = _pyserial.Serial(port, baudrate, timeout=1)
-            time.sleep(2)  # Delay 2 detik untuk memberikan waktu MCU reset setelah serial dibuka
-            print(f"✅ Connected to serial device on {port} @ {baudrate}")
+            # Delay 2 detik biar MCU selesai reset setelah port dibuka
+            time.sleep(2)
+            print(f"✅ Serial terhubung: {port} @ {baudrate} baud")
         except Exception as e:
             print(f"❌ Serial Error: {e}")
             self.ser = None
 
+    def is_connected(self) -> bool:
+        """Cek apakah koneksi serial aktif."""
+        return self.ser is not None and self.ser.is_open
+
     def send_trigger(self, category: str):
-        if not self.ser:
-            print("⚠️ Serial not connected — skipping send")
+        """
+        Kirim byte perintah ke Arduino berdasarkan kategori sampah.
+
+        Args:
+            category: Nama kelas dari model YOLO (case-insensitive).
+        """
+        if not self.is_connected():
+            print("⚠️  Serial tidak terhubung — pengiriman dilewati.")
             return
 
-        # Kamus mapping wajib menggunakan huruf kecil semua (lowercase)
-        mapping = {
-            "anorganic": b'W',
-            "organic": b'O',
-            "paper": b'P',
-            
-            # Amunisi tambahan jika model YOLO mengirimkan sub-kelas atau inisial tunggal
-            "anorganic_wet": b'W',
-            "anorganic_dry": b'W',
-            "o": b'O',
-            "p": b'P'
-        }
-
-        # Bersihkan string: hapus spasi gaib di ujung, kecilkan huruf, ganti spasi tengah dengan underscore
+        # Normalisasi key: lowercase, strip spasi, spasi tengah → underscore
         key = category.lower().strip().replace(' ', '_')
 
-        # Mencari perintah byte berdasarkan key yang sudah bersih
-        cmd = mapping.get(key)
-        
+        cmd = self.CATEGORY_MAP.get(key)
+
         if cmd:
             try:
                 self.ser.write(cmd)
-                # Flush memastikan data benar-benar terkirim keluar dari buffer RPi ke kabel
-                self.ser.flush() 
-                print(f"📡 Serial Sent: '{category}' -> Key: '{key}' -> Triggered: ({cmd.decode()})")
+                # Flush paksa agar byte langsung keluar dari buffer OS ke kabel
+                self.ser.flush()
+                print(f"📡 Serial Sent: '{category}' → key='{key}' → byte=b'{cmd.decode()}'")
             except Exception as e:
-                print(f"❌ Failed to write to serial: {e}")
+                print(f"❌ Gagal menulis ke serial: {e}")
         else:
-            print(f"⚠️ No serial mapping for category: '{category}' (Processed key: '{key}')")
+            print(f"⚠️  Tidak ada mapping untuk kategori: '{category}' (key='{key}')")
+            print(f"    Mapping yang tersedia: {list(self.CATEGORY_MAP.keys())}")
+
+    def close(self):
+        """Tutup koneksi serial dengan aman."""
+        if self.ser and self.ser.is_open:
+            try:
+                self.ser.close()
+                print("🔒 Koneksi serial ditutup.")
+            except Exception as e:
+                print(f"⚠️  Error saat menutup serial: {e}")
