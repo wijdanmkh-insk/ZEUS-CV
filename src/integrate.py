@@ -6,7 +6,7 @@ import os
 import json
 from pathlib import Path
 from gpiozero import Servo
-from gpiozero.pins.lgpio import LGPIOFactory
+# Menghapus LGPIOFactory supaya fallback ke backend native
 
 # File configuration
 JSON = os.path.join(os.path.dirname(__file__), "../res/detected.json")
@@ -19,11 +19,11 @@ REQ_TIME = 2.0
 # 🤖 INISIALISASI DRIVER SERVO DIRECT GPIO (RASPBERRY PI 5)
 # ==============================================================================
 print("🔌 Initializing Direct GPIO Servos...")
-factory = LGPIOFactory()
+# Menghapus paksaan factory lgpio, biarkan gpiozero memilih otomatis (RPi.GPIO / rpikernel)
 
-# Setup Servo di GPIO 12 (Pan) dan GPIO 13 (Tilt) dengan lebar pulsa 0.5ms - 2.5ms (0-180°)
-pan_servo = Servo(12, pin_factory=factory, min_pulse_width=0.5/1000, max_pulse_width=2.5/1000)
-tilt_servo = Servo(13, pin_factory=factory, min_pulse_width=0.5/1000, max_pulse_width=2.5/1000)
+# Setup Servo di GPIO 12 (Tilt/Pin 9 di Arduino) dan GPIO 13 (Pan/Pin 10 di Arduino)
+tilt_servo  = Servo(12, min_pulse_width=0.5/1000, max_pulse_width=2.5/1000)
+pan_servo = Servo(13, min_pulse_width=0.5/1000, max_pulse_width=2.5/1000)
 
 # Simpan state posisi dalam format internal gpiozero (-1.0 sampai 1.0)
 current_pan = -1.0
@@ -37,7 +37,7 @@ def angle_to_value(angle):
     return (angle / 90.0) - 1.0
 
 def smooth_move(servo_obj, from_val, to_val, steps=25, step_delay=0.01):
-    """Menggerakkan servo secara halus per step untuk mengurangi beban mekanik"""
+    """Menggerakkan servo secara halus per step untuk mengurangi beban mekanik/tersentak"""
     if from_val == to_val:
         servo_obj.value = to_val
         return
@@ -50,30 +50,37 @@ def smooth_move(servo_obj, from_val, to_val, steps=25, step_delay=0.01):
         time.sleep(step_delay)
     servo_obj.value = to_val
 
-def execute_sorting(pan_angle, tilt_angle):
-    """Menggerakkan servo ke lokasi drop sampah, tahan 3 detik, lalu balik ke Home"""
+def moveServos(pan: int, tilt: int):
+    """Menyamakan fungsi dari Arduino `moveServos(int pan, int tilt)` ke format Raspberry"""
     global current_pan, current_tilt
     
-    target_pan = angle_to_value(pan_angle)
-    target_tilt = angle_to_value(tilt_angle)
+    target_pan = angle_to_value(pan)
+    target_tilt = angle_to_value(tilt)
     
-    # 1. Gerak halus menuju lokasi pembuangan kriteria sampah
-    smooth_move(pan_servo, current_pan, target_pan)
     smooth_move(tilt_servo, current_tilt, target_tilt)
+    smooth_move(pan_servo, current_pan, target_pan)
     
-    # 2. Tahan posisi 3 detik sesuai logika DUMP_HOLD_MS di Arduino dulu
+    current_pan = target_pan
+    current_tilt = target_tilt
+
+def resetToHome():
+    """Fungsi persis seperti `resetToHome()` di Arduino"""
+    print("↩️  Kembali ke Home Position...")
+    moveServos(pan=0, tilt=0)
+    print("✅ READY — Siap mendeteksi objek berikutnya.")
+
+def execute_sorting(pan_angle, tilt_angle):
+    """Fungsi utama persis seperti di baris `Trigger Logika Arduino`"""
+    
+    # 1. Gerak ke posisi pembuangan
+    moveServos(pan_angle, tilt_angle)
+    
+    # 2. Tahan posisi 3 detik sesuai logika DUMP_HOLD_MS
     print("⏳ Menahan posisi pembuangan sampah...")
     time.sleep(3.0)
     
     # 3. Reset otomatis ke posisi Home (0, 0)
-    print("↩️ Kembali ke Home Position (0, 0)...")
-    smooth_move(pan_servo, target_pan, angle_to_value(0))
-    smooth_move(tilt_servo, target_tilt, angle_to_value(0))
-    
-    # Update state posisi terakhir (sekarang berada di 0,0)
-    current_pan = angle_to_value(0)
-    current_tilt = angle_to_value(0)
-    print("✅ READY — Siap mendeteksi objek berikutnya.")
+    resetToHome()
 
 # ==============================================================================
 # ⚙️ INISIALISASI MODEL YOLO
