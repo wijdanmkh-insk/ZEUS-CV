@@ -21,7 +21,7 @@ JSON = os.path.join(os.path.dirname(__file__), "../res/detected.json")
 CSV_LOG = os.path.join(os.path.dirname(__file__), "../res/latency_log.csv")
 
 Path(os.path.dirname(JSON)).mkdir(parents=True, exist_ok=True)
-REQ_TIME = 5.0
+REQ_TIME = 3.0
 
 # 🛠️ PERBAIKAN 1: Hapus .to("cpu") di sini, kita akan paksa device="cpu" langsung di fungsi inferensi
 model = YOLO("../model/rpi.onnx")  
@@ -157,26 +157,35 @@ def process(source: str, conf_threshold: float = 0.6, required_time: float = REQ
 
                 # Logika Timer dan Trigger Serial
                 if class_name in logged_objects:
+                    cv2.putText(annotated_frame, f"LOCKED: {class_name}", (x1, y2 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
                     continue
 
                 if class_name not in object_timers:
                     object_timers[class_name] = time.time()
+                    elapsed_time = 0.0
                 else:
                     elapsed_time = time.time() - object_timers[class_name]
-                    if elapsed_time >= required_time:
-                        save_detections(class_name)
-                        logged_objects.add(class_name)
-                        
-                        send_category = None
-                        if class_map and class_name in class_map:
-                            send_category = class_map[class_name]
-                        else:
-                            normalized = class_name.lower().replace(' ', '_')
-                            if normalized in ("organic", "anorganic", "hazard", "paper"):
-                                send_category = normalized
+                    
+                # Menampilkan animasi timer di bawah bounding box
+                cv2.putText(annotated_frame, f"Hold: {elapsed_time:.1f}s / {required_time}s", (x1, y2 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2, cv2.LINE_AA)
 
-                        if serial_conn and send_category:
-                            serial_conn.send_trigger(send_category)
+                if elapsed_time >= required_time:
+                    save_detections(class_name)
+                    logged_objects.add(class_name)
+                    
+                    send_category = None
+                    if class_map and class_name in class_map:
+                        send_category = class_map[class_name]
+                    else:
+                        normalized = class_name.lower().replace(' ', '_')
+                        # Menyesuaikan label ke format yang diterima Serial
+                        if normalized in ("organic", "anorganic", "hazard", "paper", "anorganic_wet", "anorganic_dry"):
+                            send_category = normalized
+                        elif normalized == "o": send_category = "organic" # Contoh jika model namain kelasnya O
+                        elif normalized == "p": send_category = "paper"   # Contoh jika model namain kelasnya P
+
+                    if serial_conn and send_category:
+                        serial_conn.send_trigger(send_category)
 
             # Reset Timer untuk Objek yang Hilang
             for active_class in list(object_timers.keys()):
@@ -202,7 +211,7 @@ def process(source: str, conf_threshold: float = 0.6, required_time: float = REQ
 def webcam(
     source: str = typer.Option("0", "--source"), 
     conf: float = typer.Option(0.55, "--conf", "-c"), 
-    req_time: float = typer.Option(5.0, "--req-time"),
+    req_time: float = typer.Option(3.0, "--req-time"),
     serial_enable: bool = typer.Option(False, "--serial"),
     serial_port: str = typer.Option('/dev/ttyUSB0', "--serial-port"),
     baudrate: int = typer.Option(115200, "--baud"),
