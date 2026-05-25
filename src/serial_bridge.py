@@ -26,10 +26,9 @@ class ZeusSerial:
             return
 
         mapping = {
-            "anorganic_wet": b'W',
-            "anorganic_dry": b'D',
-            "organic": b'O',
-            "paper": b'P'
+            "Anorganic": b'W',
+            "Organic": b'O',
+            "Paper": b'P'
         }
 
         key = category.lower().replace(' ', '_')
