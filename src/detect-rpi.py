@@ -24,7 +24,7 @@ Path(os.path.dirname(JSON)).mkdir(parents=True, exist_ok=True)
 REQ_TIME = 3.0
 
 # 🛠️ PERBAIKAN 1: Hapus .to("cpu") di sini, kita akan paksa device="cpu" langsung di fungsi inferensi
-model = YOLO("../model/rpi.onnx")  
+model = YOLO("/model/rpi.onnx")  
 class_names = model.names
 print("✅ Model loaded: model/rpi.onnx")
 print(f"📋 Class names: {class_names}")
