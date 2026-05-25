@@ -4,27 +4,35 @@ import typer
 import time
 import os
 import json
+import sys
 from pathlib import Path
 
-# Optional serial bridge
+# ==============================================================================
+# 🛠️ AREA DEBUGGING IMPORT SERIAL (Biar ketahuan kalau ada silent error)
+# ==============================================================================
+ZeusSerial = None
+import_error_msg = ""
+
 try:
     from src.serial_bridge import ZeusSerial
-except Exception:
+    print("✅ Successfully imported ZeusSerial from src.serial_bridge")
+except Exception as e1:
     try:
         from serial_bridge import ZeusSerial
-    except Exception:
+        print("✅ Successfully imported ZeusSerial from serial_bridge")
+    except Exception as e2:
+        import_error_msg = f"\n   - Hubungan 'src.serial_bridge': {str(e1)}\n   - Hubungan 'serial_bridge': {str(e2)}"
         ZeusSerial = None
 
 # File configuration
 JSON = os.path.join(os.path.dirname(__file__), "../res/detected.json")
-# Tambahkan file log CSV untuk data latensi riset laporan ZEUS
 CSV_LOG = os.path.join(os.path.dirname(__file__), "../res/latency_log.csv")
 
 Path(os.path.dirname(JSON)).mkdir(parents=True, exist_ok=True)
 REQ_TIME = 3.0
 
-# 🛠️ PERBAIKAN 1: Hapus .to("cpu") di sini, kita akan paksa device="cpu" langsung di fungsi inferensi
-model = YOLO("/model/rpi.onnx")  
+# Inisialisasi Model
+model = YOLO("../model/rpi.onnx")  
 class_names = model.names
 print("✅ Model loaded: model/rpi.onnx")
 print(f"📋 Class names: {class_names}")
@@ -79,13 +87,48 @@ def process(source: str, conf_threshold: float = 0.6, required_time: float = REQ
         except Exception as e:
             print(f"⚠️ Failed to load mapping file: {e}")
 
-    if serial_enable and ZeusSerial is not None:
-        try:
-            serial_conn = ZeusSerial(port=serial_port, baudrate=baudrate)
-            print(f"Connected to MCU via {serial_port}")
-        except Exception as e:
-            print(f"⚠️ Could not create serial connection: {e}")
-            serial_conn = None
+    # ==============================================================================
+    # 🛠️ AREA HARD-DEBUGGING KONEKSI SERIAL (Analisis Penyebab Kegagalan)
+    # ==============================================================================
+    print("\n" + "="*50)
+    print(f"[SERIAL DEBUG] Menjalankan inisialisasi serial...")
+    print(f"[SERIAL DEBUG] Flag --serial aktif? -> {serial_enable}")
+    print(f"[SERIAL DEBUG] Status Class ZeusSerial -> {'TERSEDIA' if ZeusSerial is not None else 'KOSONG/NULL'}")
+    
+    if serial_enable:
+        if ZeusSerial is None:
+            print("❌ KONEKSI BATAL: Modul serial_bridge gagal di-import total!")
+            print(f"   Detail error saat import tadi:{import_error_msg}")
+            print("   💡 SOLUSI: Pastikan lib 'pyserial' terinstal (`pip install pyserial`) atau file serial_bridge.py tidak error.")
+        else:
+            # Cek apakah port ada di sistem Linux RPi sebelum mencoba buka
+            if not os.path.exists(serial_port):
+                print(f"❌ KONEKSI BATAL: Port '{serial_port}' tidak ditemukan di sistem!")
+                print("   💡 SOLUSI: Coba cabut-colok MCU, lalu ketik `ls /dev/tty*` di terminal RPi.")
+                print("             Kemungkinan portnya berubah jadi `/dev/ttyACM0` atau sejenisnya.")
+            else:
+                try:
+                    print(f"[SERIAL DEBUG] Mencoba membuka port {serial_port} dengan baudrate {baudrate}...")
+                    serial_conn = ZeusSerial(port=serial_port, baudrate=baudrate)
+                    print(f"✅ KONEKSI BERHASIL: Tersambung ke MCU via {serial_port}")
+                except Exception as e:
+                    print(f"❌ KONEKSI GAGAL: Terjadi masalah internal saat membuka port {serial_port}!")
+                    print(f"   Detail Error Sistem: {str(e)}")
+                    
+                    # Analisis error berbasis teks bawaan OS Linux
+                    if "Permission denied" in str(e) or "PermissionError" in str(e):
+                        print("   💡 PENYEBAB: Hak akses diblokir oleh OS (Permission Denied).")
+                        print(f"   💡 SOLUSI: Jalankan perintah ini di terminal RPi: `sudo chmod 666 {serial_port}`")
+                    elif "Device or resource busy" in str(e):
+                        print("   💡 PENYEBAB: Port sedang dipakai/dikunci oleh proses atau script lain!")
+                        print(f"   💡 SOLUSI: Ketik `sudo lsof | grep {os.path.basename(serial_port)}` untuk cari PID-nya lalu bunuh prosesnya.")
+                    
+                    import traceback
+                    print("\n--- Stack Trace Error Lengkap ---")
+                    traceback.print_exc()
+                    print("---------------------------------\n")
+                    serial_conn = None
+    print("="*50 + "\n")
 
     if not cap.isOpened():
         print(f"Error: Could not open source '{source}'.")
@@ -104,10 +147,6 @@ def process(source: str, conf_threshold: float = 0.6, required_time: float = REQ
                 break
 
             annotated_frame = frame.copy()
-
-            # 🛠️ PERBAIKAN 2: Tambahkan device="cpu" SECARA EKSPLISIT di sini untuk membungkam warning CUDA.
-            # Catatan: Jika model ONNX kamu masih rewel soal dimensi (error index 2 got 320 expected 640), 
-            # ganti imgsz=320 di bawah ini menjadi imgsz=640 atau gunakan file ONNX yang sudah di-export ulang ke 320.
             
             start_time = time.perf_counter() # Mulai hitung latensi
             
@@ -116,11 +155,10 @@ def process(source: str, conf_threshold: float = 0.6, required_time: float = REQ
             
             end_time = time.perf_counter() # Selesai hitung latensi
             
-            # 📊 LOGIKA LATENSI UNTUK RISET KALIBRASI
+            # Logika Latensi Riset
             latency_ms = (end_time - start_time) * 1000
             inf_fps = 1000 / latency_ms if latency_ms > 0 else 0
             
-            # Simpan data latensi ke file CSV secara real-time
             with open(CSV_LOG, "a") as f:
                 f.write(f"{time.time()},{latency_ms:.2f},{inf_fps:.1f}\n")
 
@@ -166,7 +204,6 @@ def process(source: str, conf_threshold: float = 0.6, required_time: float = REQ
                 else:
                     elapsed_time = time.time() - object_timers[class_name]
                     
-                # Menampilkan animasi timer di bawah bounding box
                 cv2.putText(annotated_frame, f"Hold: {elapsed_time:.1f}s / {required_time}s", (x1, y2 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2, cv2.LINE_AA)
 
                 if elapsed_time >= required_time:
@@ -178,21 +215,23 @@ def process(source: str, conf_threshold: float = 0.6, required_time: float = REQ
                         send_category = class_map[class_name]
                     else:
                         normalized = class_name.lower().replace(' ', '_')
-                        # Menyesuaikan label ke format yang diterima Serial
                         if normalized in ("organic", "anorganic", "hazard", "paper", "anorganic_wet", "anorganic_dry"):
                             send_category = normalized
-                        elif normalized == "o": send_category = "organic" # Contoh jika model namain kelasnya O
-                        elif normalized == "p": send_category = "paper"   # Contoh jika model namain kelasnya P
+                        elif normalized == "o": send_category = "organic"
+                        elif normalized == "p": send_category = "paper"
 
                     if serial_conn and send_category:
-                        serial_conn.send_trigger(send_category)
+                        try:
+                            serial_conn.send_trigger(send_category)
+                        except Exception as e_send:
+                            print(f"⚠️ Gagal mengirim data serial ke MCU: {e_send}")
 
             # Reset Timer untuk Objek yang Hilang
             for active_class in list(object_timers.keys()):
                 if active_class not in current_frame_classes:
                     del object_timers[active_class]
 
-            # 🛠️ PERBAIKAN 3: Tampilkan info Latensi Riset langsung di Layar Video (Warna Kuning Taktis)
+            # Info Latensi di Layar Video
             cv2.putText(annotated_frame, f"Latency: {latency_ms:.1f} ms", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
             cv2.putText(annotated_frame, f"Model FPS: {inf_fps:.1f}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
 
@@ -205,7 +244,11 @@ def process(source: str, conf_threshold: float = 0.6, required_time: float = REQ
         cap.release()
         cv2.destroyAllWindows()
         if serial_conn and hasattr(serial_conn, 'close'):
-            serial_conn.close()
+            try:
+                serial_conn.close()
+                print("🔒 Serial connection closed safely.")
+            except Exception:
+                pass
 
 @app.command()
 def webcam(
