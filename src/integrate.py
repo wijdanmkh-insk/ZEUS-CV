@@ -9,7 +9,7 @@ from gpiozero import Servo
 # Menghapus LGPIOFactory supaya fallback ke backend native
 
 # File configuration
-JSON = os.path.join(os.path.dirname(__file__), "../res/detected.json")
+JSON = os.path.join(os.path.dirname(__file__), "../res/detectedgit force merge.json")
 CSV_LOG = os.path.join(os.path.dirname(__file__), "../res/latency_log.csv")
 
 Path(os.path.dirname(JSON)).mkdir(parents=True, exist_ok=True)
