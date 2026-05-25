@@ -6,7 +6,7 @@ except Exception as e:
 
 
 class ZeusSerial:
-    def __init__(self, port='/dev/ttyUSB0', baudrate=115200):
+    def __init__(self, port='/dev/ttyUSB0', baudrate=9600):
         self.ser = None
         if _pyserial is None:
             print("❌ pyserial not available (install with 'pip install pyserial')")
