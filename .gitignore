@@ -7,3 +7,5 @@ src/dataset_sampah
 /datasets
 /ref
 /res
+model/archive
+dataset_background
