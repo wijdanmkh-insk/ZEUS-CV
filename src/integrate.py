@@ -153,7 +153,8 @@ def process(source: str, conf_threshold: float = 0.6, required_time: float = REQ
             annotated_frame = frame.copy()
             start_time = time.perf_counter()
             
-            results_list = model(frame, conf=conf_threshold, imgsz=640, device="cpu", verbose=False)
+            # Khusus file ONNX, format argumen 'verbose' dan cara manggilnya kadang harus lewat .predict()
+            results_list = model.predict(frame, conf=conf_threshold, imgsz=640, device="cpu", verbose=False)
             results = results_list[0]
             
             end_time = time.perf_counter()
