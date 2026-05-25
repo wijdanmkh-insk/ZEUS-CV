@@ -111,7 +111,7 @@ def process(source: str, conf_threshold: float = 0.6, required_time: float = REQ
             
             start_time = time.perf_counter() # Mulai hitung latensi
             
-            results_list = model(frame, conf=conf_threshold, imgsz=320, device="cpu", verbose=False)
+            results_list = model(frame, conf=conf_threshold, imgsz=640, device="cpu", verbose=False)
             results = results_list[0]
             
             end_time = time.perf_counter() # Selesai hitung latensi
