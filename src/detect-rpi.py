@@ -257,7 +257,7 @@ def webcam(
     req_time: float = typer.Option(3.0, "--req-time"),
     serial_enable: bool = typer.Option(False, "--serial"),
     serial_port: str = typer.Option('/dev/ttyUSB0', "--serial-port"),
-    baudrate: int = typer.Option(115200, "--baud"),
+    baudrate: int = typer.Option(9600, "--baud"),
     serial_map: str | None = typer.Option(None, "--serial-map"),
     debug: bool = typer.Option(False, "--debug", "-d"),
 ):
