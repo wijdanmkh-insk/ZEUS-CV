@@ -6,7 +6,7 @@ from ultralytics import YOLO
 SERIAL_PORT = '/dev/ttyACM0'
 BAUD_RATE = 115200
 
-MODEL_PATH = 'best.pt'
+MODEL_PATH = 'rpi.onnx'
 
 CLASS_MAPPING = {
     'organic': 'O',
