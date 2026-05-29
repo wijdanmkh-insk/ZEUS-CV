@@ -57,7 +57,7 @@ transform = transforms.Compose([
 # 4. OPEN IP CAMERA
 # =========================
 
-cap = cv2.VideoCapture(2)
+cap = cv2.VideoCapture(0)
 
 if not cap.isOpened():
     print("❌ Tidak bisa buka IP Camera")
