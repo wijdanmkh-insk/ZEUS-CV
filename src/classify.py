@@ -21,7 +21,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # =========================
 
 
-model_path = os.path.join(os.path.dirname(__file__), "classify.pth")
+model_path = os.path.join(os.path.dirname(__file__), "best_zeus_model.pth")
 checkpoint = torch.load(model_path, map_location=device)
 
 # NOTE: Anda harus menginisialisasi arsitektur model sebelum me-load state_dict.
@@ -57,7 +57,7 @@ transform = transforms.Compose([
 # 4. OPEN IP CAMERA
 # =========================
 
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(1)
 
 if not cap.isOpened():
     print("❌ Tidak bisa buka IP Camera")
