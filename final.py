@@ -18,7 +18,8 @@ SERVO_COOLDOWN = 5.0
 # SERIAL TO ARDUINO
 # =========================
 # Sesuaikan port dengan OS yang aktif
-arduino = serial.Serial('/dev/ttyUSB0', 115200, timeout=1)
+port = "usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0"
+arduino = serial.Serial(f'/dev/{port}', 115200, timeout=1)
 time.sleep(2)
 print("✅ Arduino connected")
 
