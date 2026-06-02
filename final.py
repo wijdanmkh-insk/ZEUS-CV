@@ -69,7 +69,7 @@ def map_waste_category(label):
     return None
 
 # =========================
-# CAMERA
+# CAMERA 
 # =========================
 cap = cv2.VideoCapture(1)
 if not cap.isOpened():
