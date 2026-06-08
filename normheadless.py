@@ -16,7 +16,7 @@ device = torch.device("cpu")
 # CONFIG
 # =========================
 CONF_THRESHOLD = 0.75
-VOTE_WINDOW = 3.0
+VOTE_WINDOW = 4.0
 SERVO_COOLDOWN = 3.0
 USE_SERIAL = True
 
@@ -36,7 +36,7 @@ def send_command(cmd):
     print("📡 SEND:", cmd)
 
 # =========================
-# LOAD CHECKPOINT (.pth)
+# LOAD .pth CHECKPOINT
 # =========================
 ckpt = torch.load("model.pth", map_location=device)
 
@@ -44,11 +44,10 @@ state_dict = ckpt["model_state_dict"]
 class_names = ckpt["class_names"]
 
 NUM_CLASSES = len(class_names)
-
 print("📦 Classes:", NUM_CLASSES)
 
 # =========================
-# BUILD MODEL (MobileNetV2)
+# MODEL
 # =========================
 model = models.mobilenet_v2(weights=None)
 model.classifier[1] = torch.nn.Linear(model.last_channel, NUM_CLASSES)
@@ -67,27 +66,21 @@ transform = transforms.Compose([
 ])
 
 # =========================
-# LABEL MAP
+# CAMERA (HEADLESS)
 # =========================
-def map_waste(label):
-    if label in ["Vegetation", "Food Organics"]:
-        return "ORGANIC"
-    elif label in ["Paper", "Cardboard"]:
-        return "PAPER"
-    elif label in ["Glass", "Metal"]:
-        return "HAZARD"
-    elif label in ["Plastic", "Textile Trash"]:
-        return "ANORGANIC"
-    return "UNKNOWN"
+cap = cv2.VideoCapture(0)
+
+if not cap.isOpened():
+    raise RuntimeError("Camera not found")
 
 # =========================
-# CAMERA
+# STATE
 # =========================
-cap = cv2.VideoCapture(1)
-
 votes = []
 start_time = time.time()
 last_send = 0
+
+print("🚀 HEADLESS INFERENCE RUNNING... (no GUI)")
 
 # =========================
 # LOOP
@@ -97,42 +90,32 @@ while True:
     if not ret:
         continue
 
-    frame = cv2.resize(frame, (640, 480))
+    # preprocess
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
     img = Image.fromarray(rgb)
     x = transform(img).unsqueeze(0).to(device)
 
-    # =========================
-    # INFERENCE
-    # =========================
+    # inference
     with torch.no_grad():
         out = model(x)
-        prob = torch.nn.functional.softmax(out, dim=1)
+        prob = torch.softmax(out, dim=1)
         conf, pred = torch.max(prob, 1)
 
-    pred_idx = pred.item()
+    idx = pred.item()
 
-    # SAFETY CHECK
-    if pred_idx >= NUM_CLASSES:
-        print("⚠️ Invalid index:", pred_idx)
+    if idx >= NUM_CLASSES:
         continue
 
-    label = class_names[pred_idx]
+    label = class_names[idx]
     confidence = conf.item()
-    waste = map_waste(label)
 
-    # =========================
-    # VOTING
-    # =========================
+    # voting input
     if confidence >= CONF_THRESHOLD:
-        votes.append(waste)
+        votes.append(label)
     else:
         votes.append("UNKNOWN")
 
-    # =========================
-    # DECISION WINDOW
-    # =========================
+    # decision window
     if time.time() - start_time >= VOTE_WINDOW:
 
         if votes:
@@ -145,32 +128,11 @@ while True:
                     send_command(final)
                     last_send = time.time()
 
+            else:
+                print("⚠️ No valid detection in window")
+
         votes.clear()
         start_time = time.time()
-
-    # =========================
-    # DISPLAY
-    # =========================
-    cv2.putText(frame,
-                f"{label} ({confidence:.2f})",
-                (20, 40),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 0),
-                2)
-
-    cv2.putText(frame,
-                f"Buffer: {len(votes)}",
-                (20, 80),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (255, 255, 0),
-                2)
-
-    cv2.imshow("PTH Model System", frame)
-
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
 
     time.sleep(0.01)
 
@@ -178,7 +140,5 @@ while True:
 # CLEANUP
 # =========================
 cap.release()
-cv2.destroyAllWindows()
-
 if arduino:
     arduino.close()
