@@ -2,27 +2,22 @@ import cv2
 import time
 import torch
 import serial
-import numpy as np
-from ultralytics import YOLO
-import torchvision.models as models
 from collections import Counter
 from PIL import Image
 from torchvision import transforms
+import torchvision.models as models
 
 # =========================
 # DEVICE
 # =========================
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
 
 # =========================
 # CONFIG
 # =========================
 CONF_THRESHOLD = 0.75
-YOLO_CONF = 0.2
-
-VOTE_WINDOW = 3.0
+VOTE_WINDOW = 4.0
 SERVO_COOLDOWN = 3.0
-
 USE_SERIAL = True
 
 # =========================
@@ -34,33 +29,31 @@ if USE_SERIAL:
     print("✅ ESP32 connected")
 else:
     arduino = None
-    print("SIMULATION MODE")
 
 def send_command(cmd):
-    if USE_SERIAL and arduino:
+    if arduino:
         arduino.write((cmd + "\n").encode())
-        arduino.flush()
     print("📡 SEND:", cmd)
 
 # =========================
-# YOLO MODEL
+# LOAD CHECKPOINT (.pth)
 # =========================
-yolo = YOLO("yolov8n.pt")  # ganti kalau sudah custom waste model
+ckpt = torch.load("model.pth", map_location=device)
+
+state_dict = ckpt["model_state_dict"]
+class_names = ckpt["class_names"]
+
+NUM_CLASSES = len(class_names)
+
+print("📦 Classes:", NUM_CLASSES)
 
 # =========================
-# CLASSIFIER (MobileNet)
+# BUILD MODEL (MobileNetV2)
 # =========================
-checkpoint = torch.load("best_zeus_model.pth", map_location=device)
-class_names = checkpoint["class_names"]
-
 model = models.mobilenet_v2(weights=None)
-model.classifier[1] = torch.nn.Linear(
-    model.classifier[1].in_features,
-    len(class_names)
-)
+model.classifier[1] = torch.nn.Linear(model.last_channel, NUM_CLASSES)
 
-model.load_state_dict(checkpoint["model_state_dict"])
-model = model.to(device)
+model.load_state_dict(state_dict, strict=True)
 model.eval()
 
 # =========================
@@ -74,7 +67,7 @@ transform = transforms.Compose([
 ])
 
 # =========================
-# WASTE MAP
+# LABEL MAP
 # =========================
 def map_waste(label):
     if label in ["Vegetation", "Food Organics"]:
@@ -83,114 +76,87 @@ def map_waste(label):
         return "PAPER"
     elif label in ["Glass", "Metal"]:
         return "HAZARD"
-    elif label in ["Plastic", "Textile Trash", "Miscellaneous Trash"]:
+    elif label in ["Plastic", "Textile Trash"]:
         return "ANORGANIC"
-    return None
+    return "UNKNOWN"
 
 # =========================
 # CAMERA
 # =========================
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(1)
 
-# =========================
-# VOTING STATE
-# =========================
 votes = []
 start_time = time.time()
-last_send_time = 0
+last_send = 0
 
 # =========================
-# MAIN LOOP
+# LOOP
 # =========================
 while True:
     ret, frame = cap.read()
     if not ret:
-        break
+        continue
 
     frame = cv2.resize(frame, (640, 480))
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    img = Image.fromarray(rgb)
+    x = transform(img).unsqueeze(0).to(device)
 
     # =========================
-    # YOLO DETECTION
+    # INFERENCE
     # =========================
-    results = yolo(frame, verbose=False)[0]
-    boxes = results.boxes
+    with torch.no_grad():
+        out = model(x)
+        prob = torch.nn.functional.softmax(out, dim=1)
+        conf, pred = torch.max(prob, 1)
 
-    waste = None
-    confidence = 0
+    pred_idx = pred.item()
 
-    if boxes is not None and len(boxes) > 0:
+    # SAFETY CHECK
+    if pred_idx >= NUM_CLASSES:
+        print("⚠️ Invalid index:", pred_idx)
+        continue
 
-        # ambil box terbaik
-        best_box = max(boxes, key=lambda b: float(b.conf[0]))
-
-        conf_yolo = float(best_box.conf[0])
-
-        if conf_yolo > YOLO_CONF:
-
-            x1, y1, x2, y2 = map(int, best_box.xyxy[0])
-            crop = frame[y1:y2, x1:x2]
-
-            if crop.size != 0:
-
-                # =========================
-                # CLASSIFICATION
-                # =========================
-                img = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
-                x = transform(img).unsqueeze(0).to(device)
-
-                with torch.no_grad():
-                    out = model(x)
-                    prob = torch.nn.functional.softmax(out, dim=1)
-                    conf, pred = torch.max(prob, 1)
-
-                label = class_names[pred.item()]
-                confidence = conf.item()
-                waste = map_waste(label)
-
-                # draw bbox
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(frame, label, (x1, y1 - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                            (0, 255, 0), 2)
+    label = class_names[pred_idx]
+    confidence = conf.item()
+    waste = map_waste(label)
 
     # =========================
-    # VOTING INPUT
+    # VOTING
     # =========================
-    if confidence >= CONF_THRESHOLD and waste:
+    if confidence >= CONF_THRESHOLD:
         votes.append(waste)
     else:
         votes.append("UNKNOWN")
 
     # =========================
-    # VOTING WINDOW (3 detik)
+    # DECISION WINDOW
     # =========================
     if time.time() - start_time >= VOTE_WINDOW:
 
-        if len(votes) > 0:
-            count = Counter(votes)
-            final, freq = count.most_common(1)[0]
+        if votes:
+            final, freq = Counter(votes).most_common(1)[0]
             stability = freq / len(votes)
 
             if final != "UNKNOWN":
-                if time.time() - last_send_time > SERVO_COOLDOWN:
-
+                if time.time() - last_send > SERVO_COOLDOWN:
                     print(f"\n🔒 FINAL: {final} | {stability*100:.1f}%")
                     send_command(final)
-
-                    last_send_time = time.time()
+                    last_send = time.time()
 
         votes.clear()
         start_time = time.time()
 
     # =========================
-    # UI
+    # DISPLAY
     # =========================
     cv2.putText(frame,
-                f"Detect: {waste} ({confidence:.2f})",
+                f"{label} ({confidence:.2f})",
                 (20, 40),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7,
-                (255, 255, 0),
+                (0, 255, 0),
                 2)
 
     cv2.putText(frame,
@@ -198,13 +164,15 @@ while True:
                 (20, 80),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7,
-                (0, 255, 255),
+                (255, 255, 0),
                 2)
 
-    cv2.imshow("YOLO + Waste Classifier", frame)
+    cv2.imshow("PTH Model System", frame)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
+
+    time.sleep(0.01)
 
 # =========================
 # CLEANUP
@@ -212,5 +180,5 @@ while True:
 cap.release()
 cv2.destroyAllWindows()
 
-if USE_SERIAL and arduino:
+if arduino:
     arduino.close()

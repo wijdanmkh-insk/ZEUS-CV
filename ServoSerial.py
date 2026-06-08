@@ -2,58 +2,63 @@ import cv2
 import time
 import torch
 import serial
-import torchvision.models as models
-from collections import Counter, deque
+from collections import Counter
 from PIL import Image
 from torchvision import transforms
 
 # =========================
 # DEVICE
 # =========================
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
 
 # =========================
 # CONFIG
 # =========================
 CONF_THRESHOLD = 0.75
-VOTE_WINDOW = 3.0
+VOTE_WINDOW = 4.0
 SERVO_COOLDOWN = 3.0
-
 USE_SERIAL = True
 
 # =========================
 # SERIAL
 # =========================
 if USE_SERIAL:
-    port = "/dev/ttyUSB0"
-    arduino = serial.Serial(port, 115200, timeout=1)
+    arduino = serial.Serial("/dev/ttyUSB0", 115200, timeout=1)
     time.sleep(2)
     print("✅ ESP32 connected")
 else:
     arduino = None
-    print("SIMULATION MODE")
 
 def send_command(cmd):
-    if USE_SERIAL and arduino:
+    if arduino:
         arduino.write((cmd + "\n").encode())
-        arduino.flush()
     print("📡 SEND:", cmd)
 
 # =========================
-# MODEL
+# TORCHSCRIPT MODEL (QUANTIZED)
 # =========================
-checkpoint = torch.load("best_zeus_model.pth", map_location=device)
-class_names = checkpoint["class_names"]
-
-model = models.mobilenet_v2(weights=None)
-model.classifier[1] = torch.nn.Linear(
-    model.classifier[1].in_features,
-    len(class_names)
-)
-
-model.load_state_dict(checkpoint["model_state_dict"])
-model = model.to(device)
+model = torch.jit.load("model.pth", map_location=device)
 model.eval()
+
+# =========================
+# CLASS NAMES (HARUS SINKRON DENGAN TRAINING)
+# =========================
+class_names = [
+    "Background",
+    "Cardboard",
+    "Food Organics",
+    "Glass",
+    "Hazard",
+    "Metal",
+    "Paper",
+    "Plastic",
+    "Textile Trash",
+    "Vegetation"
+]
+
+NUM_CLASSES = len(class_names)
+
+print("📦 Classes:", NUM_CLASSES)
 
 # =========================
 # TRANSFORM
@@ -75,21 +80,21 @@ def map_waste(label):
         return "PAPER"
     elif label in ["Glass", "Metal"]:
         return "HAZARD"
-    elif label in ["Plastic", "Textile Trash", "Miscellaneous Trash"]:
+    elif label in ["Plastic", "Textile Trash"]:
         return "ANORGANIC"
-    return None
+    return "UNKNOWN"
 
 # =========================
 # CAMERA
 # =========================
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(1)
 
 # =========================
-# VOTING SYSTEM
+# STATE
 # =========================
 votes = []
 start_time = time.time()
-last_send_time = 0
+last_send = 0
 
 # =========================
 # LOOP
@@ -97,7 +102,7 @@ last_send_time = 0
 while True:
     ret, frame = cap.read()
     if not ret:
-        break
+        continue
 
     frame = cv2.resize(frame, (640, 480))
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -106,47 +111,50 @@ while True:
     x = transform(img).unsqueeze(0).to(device)
 
     # =========================
-    # INFERENCE
+    # INFERENCE (TORCHSCRIPT ONLY)
     # =========================
     with torch.no_grad():
         out = model(x)
         prob = torch.nn.functional.softmax(out, dim=1)
         conf, pred = torch.max(prob, 1)
 
-    label = class_names[pred.item()]
+    pred_idx = pred.item()
+
+    # SAFETY CHECK
+    if pred_idx >= NUM_CLASSES:
+        print("⚠️ Invalid class index:", pred_idx)
+        continue
+
+    label = class_names[pred_idx]
     confidence = conf.item()
     waste = map_waste(label)
 
     # =========================
-    # VOTE INPUT
+    # VOTING
     # =========================
-    if confidence >= CONF_THRESHOLD and waste is not None:
+    if confidence >= CONF_THRESHOLD:
         votes.append(waste)
     else:
         votes.append("UNKNOWN")
 
     # =========================
-    # WINDOW CHECK (3 detik)
+    # WINDOW DECISION
     # =========================
     if time.time() - start_time >= VOTE_WINDOW:
 
-        if len(votes) > 0:
+        if votes:
             count = Counter(votes)
-
-            # ambil yang paling sering
             final, freq = count.most_common(1)[0]
             stability = freq / len(votes)
 
-            # buang UNKNOWN dominan
             if final != "UNKNOWN":
-                if (time.time() - last_send_time) > SERVO_COOLDOWN:
+                if time.time() - last_send > SERVO_COOLDOWN:
 
-                    print(f"\n🔒 FINAL: {final} | {stability*100:.1f}% confidence voting")
+                    print(f"\n🔒 FINAL: {final} | {stability*100:.1f}%")
                     send_command(final)
 
-                    last_send_time = time.time()
+                    last_send = time.time()
 
-        # RESET WINDOW
         votes.clear()
         start_time = time.time()
 
@@ -154,7 +162,7 @@ while True:
     # DISPLAY
     # =========================
     cv2.putText(frame,
-                f"Live: {label} ({confidence:.2f})",
+                f"{label} ({confidence:.2f})",
                 (20, 40),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7,
@@ -169,10 +177,12 @@ while True:
                 (255, 255, 0),
                 2)
 
-    cv2.imshow("AI Waste Voting System", frame)
+    cv2.imshow("AI Waste System", frame)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
+
+    time.sleep(0.01)
 
 # =========================
 # CLEANUP
@@ -180,5 +190,5 @@ while True:
 cap.release()
 cv2.destroyAllWindows()
 
-if USE_SERIAL and arduino:
+if arduino:
     arduino.close()
