@@ -164,9 +164,9 @@ try:
                     ser.write(command_string.encode('utf-8'))
                     print(f"[SERIAL] Mengirim data ke ESP32 -> {command_string.strip()}")
 
-                # --- COOLDOWN SYSTEM (5 DETIK KONTROL SERVO) ---
-                print(f"[SISTEM] Kamera dinonaktifkan sementara selama 5 detik untuk pergerakan mekanik...")
-                time.sleep(5.0)
+                    # --- COOLDOWN SYSTEM (5 DETIK KONTROL SERVO) ---
+                    print(f"[SISTEM] Kamera dinonaktifkan sementara selama 5 detik untuk pergerakan mekanik...")
+                    time.sleep(5.0)
                 
                 print("[SISTEM] Mengkalibrasi ulang latar belakang...")
                 # Kosongkan sisa frame di buffer akibat penundaan servo tadi
