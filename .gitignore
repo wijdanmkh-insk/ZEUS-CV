@@ -9,3 +9,10 @@ src/dataset_sampah
 /res
 model/archive
 dataset_background
+venv/
+__pycache__/
+*.log
+*.csv
+*.json
+/.vscode
+/model
