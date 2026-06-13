@@ -1,6 +1,6 @@
 *.mp4
 .venv/
-*.pt
+yolov8n.pt
 src/__pycache__/
 src/dataset_sampah
 /__pycache__/
