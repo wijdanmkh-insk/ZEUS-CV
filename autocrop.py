@@ -2,30 +2,58 @@ import time
 import cv2
 import torch
 import torchvision.transforms as transforms
+import serial  # Library untuk komunikasi UART/Serial
 from ultralytics import YOLO
 
 # ==============================================================================
 # CONFIGURATION
 # ==============================================================================
-CAMERA_INDEX = 0
+CAMERA_INDEX = 1
 YOLO_MODEL_PATH = 'yolov8n.pt'
 CLASSIFIER_MODEL_PATH = 'V1_deploy.pt'
+
+# Konfigurasi Port Serial (Sesuaikan dengan port ESP32 di Raspberry Pi kamu)
+# Di Linux/Pi biasanya terdeteksi sebagai '/dev/ttyUSB0' atau '/dev/ttyACM0'
+SERIAL_PORT = '/dev/ttyUSB0' 
+BAUD_RATE = 115200
 
 CLASS_NAMES = {
     0: "Background", 1: "Cardboard", 2: "Ewaste", 3: "Food Organics", 4: "Glass", 
     5: "Hazardous", 6: "Metal", 7: "Paper", 8: "Plastic", 9: "Textile Trash"
 }
 
-# Threshold deteksi gerakan OpenCV (makin kecil makin sensitif)
+# --- PEMETAAN KLUSTER SAMPAH ---
+CLUSTER_MAPPING = {
+    "Cardboard": "PAPER",
+    "Paper": "PAPER",
+    "Plastic": "ANORGANIC",
+    "Textile Trash": "ANORGANIC",
+    "Hazardous": "HAZARD",
+    "Glass": "HAZARD",
+    "Ewaste": "HAZARD",
+    "Metal": "HAZARD",
+    "Food Organics": "ORGANIC",
+    "Background": "UNKNOWN"
+}
+
 MOTION_THRESHOLD = 10000  
 
 # ==============================================================================
 # INITIALIZATION
 # ==============================================================================
-print("[ZEUS] Menginisialisasi sistem headless...")
+print("[ZEUS] Menginisialisasi sistem headless dengan Serial...")
 device = torch.device('cpu')
 
-# Muat model AI
+# Inisialisasi koneksi Serial ke ESP32
+try:
+    ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
+    time.sleep(2)  # Jeda 2 detik agar koneksi serial dengan ESP32 stabil pasca-reset
+    print(f"[SERIAL] Berhasil terhubung ke ESP32 via {SERIAL_PORT}")
+except Exception as e:
+    print(f"[SERIAL ERROR] Gagal membuka port {SERIAL_PORT}: {e}")
+    print("[SERIAL WARNING] Program akan tetap berjalan tanpa mengirim data fisik.")
+    ser = None
+
 yolo_model = YOLO(YOLO_MODEL_PATH)
 try:
     classifier_model = torch.jit.load(CLASSIFIER_MODEL_PATH, map_location=device)
@@ -35,7 +63,6 @@ except Exception:
 
 classifier_model.eval()
 
-# Preprocessing MobileNet
 transform = transforms.Compose([
     transforms.ToPILImage(),
     transforms.Resize((224, 224)),
@@ -48,7 +75,6 @@ if not cap.isOpened():
     print(f"[ERROR] Kamera indeks {CAMERA_INDEX} tidak dapat diakses.")
     exit()
 
-# Inisialisasi background untuk deteksi gerakan
 ret, first_frame = cap.read()
 if ret:
     gray_background = cv2.cvtColor(first_frame, cv2.COLOR_BGR2GRAY)
@@ -69,40 +95,32 @@ try:
         if not ret:
             break
 
-        # 1. DETEKSI GERAKAN (Sangat Ringan, < 1ms CPU)
         gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         gray_frame = cv2.GaussianBlur(gray_frame, (21, 21), 0)
 
-        # Hitung perbedaan antar frame
         frame_delta = cv2.absdiff(gray_background, gray_frame)
         thresh = cv2.threshold(frame_delta, 25, 255, cv2.THRESH_BINARY)[1]
         thresh = cv2.dilate(thresh, None, iterations=2)
         
-        # Hitung berapa banyak piksel yang berubah
         motion_pixel_count = cv2.countNonZero(thresh)
-
-        # Update background secara perlahan agar adaptif terhadap perubahan cahaya lab
         cv2.addWeighted(gray_frame, 0.05, gray_background, 0.95, 0, gray_background)
 
-        # 2. TRIGGER STATE (Jika ada pergerakan signifikan)
         if motion_pixel_count > MOTION_THRESHOLD:
-            print("[TRIGGER] Pergerakan terdeteksi! Mengunci posisi sampah...")
+            print("[TRIGGER] Pergerakan terdeteksi! Menunggu objek stabil (2 detik)...")
+            time.sleep(2.0)
             
-            # Berhenti sejenak (0.5 detik) agar gerakan objek stabil/berhenti bergerak
-            time.sleep(0.5)
-            
-            # Ambil frame terbaru yang jernih (tidak blur karena pergerakan)
-            for _ in range(5):  # Flush buffer kamera agar dapat frame paling baru
+            print("[SISTEM] Mengambil frame terbaru...")
+            for _ in range(10):  
                 cap.read()
+                
             ret, capture_frame = cap.read()
             if not ret:
                 continue
 
             h_f, w_f, _ = capture_frame.shape
 
-            # 3. RUN YOLO (Hanya 1x eksekusi)
+            # Run YOLO
             print("[AI EXEC] Menjalankan YOLOv8 Localizer...")
-            t_start_yolo = time.time()
             yolo_results = yolo_model(capture_frame, verbose=False)[0]
             
             best_box = None
@@ -118,46 +136,43 @@ try:
                     max_area = area
                     best_box = (x1, y1, x2, y2)
 
-            # 4. RUN MOBILENET CLASSIFIER (Hanya 1x eksekusi jika objek ketemu)
+            # Run Classifier jika objek ditemukan oleh YOLO
             if best_box is not None:
                 x1, y1, x2, y2 = best_box
                 cropped_object = capture_frame[y1:y2, x1:x2]
 
-                print("[AI EXEC] Mengklasifikasikan gambar crop dengan MobileNet...")
-                t_start_clf = time.time()
-                
+                print("[AI EXEC] Mengklasifikasikan gambar dengan MobileNet...")
                 input_tensor = transform(cropped_object).unsqueeze(0).to(device)
                 with torch.no_grad():
                     output = classifier_model(input_tensor)
                 
-                t_end_ai = time.time()
-
-                # Hitung Hasil
                 _, predicted = torch.max(output, 1)
-                final_class = CLASS_NAMES.get(predicted.item(), f"Unknown ({predicted.item()})")
+                detected_object_name = CLASS_NAMES.get(predicted.item(), "Background")
                 
-                yolo_time = (t_start_clf - t_start_yolo) * 1000
-                clf_time = (t_end_ai - t_start_clf) * 1000
-                total_time = yolo_time + clf_time
+                # --- PROSES EVALUASI KLUSTER ---
+                target_cluster = CLUSTER_MAPPING.get(detected_object_name, "UNKNOWN")
 
-                # OUTPUT UTAMA (Bisa disambungkan ke logika GPIO / Servo dari sini)
                 print("-" * 50)
-                print(f"HASIL DETEKSI : {final_class.upper()}")
-                print(f"YOLO Latency  : {yolo_time:.1f} ms")
-                print(f"MobileNet Lat : {clf_time:.1f} ms")
-                print(f"Total AI Time : {total_time:.1f} ms")
+                print(f"OBJEK TERDETEKSI : {detected_object_name.upper()}")
+                print(f"KLUSTER SAMPAH   : {target_cluster}")
                 print("-" * 50)
 
-                # --- TEMPATKAN LOGIKA KONTROL HARDWARE DI SINI ---
-                # Contoh: jika final_class == "Plastic": putar_servo_ke_kanan()
+                # --- KIRIM PERINTAH SERIAL KE ESP32 ---
+                if ser is not None and target_cluster != "UNKNOWN":
+                    # Menambahkan karakter '\n' (newline) sebagai pembatas akhir data di ESP32
+                    command_string = f"{target_cluster}\n"
+                    ser.write(command_string.encode('utf-8'))
+                    print(f"[SERIAL] Mengirim data ke ESP32 -> {command_string.strip()}")
+
+                # --- COOLDOWN SYSTEM (5 DETIK KONTROL SERVO) ---
+                print(f"[SISTEM] Kamera dinonaktifkan sementara selama 5 detik untuk pergerakan mekanik...")
+                time.sleep(5.0)
                 
-                # Jeda Pengosongan (Cooldown 4 detik agar aktuator bekerja 
-                # dan mencegah double trigger saat sampah jatuh)
-                print("[SISTEM] Cooldown. Menunggu sistem siap kembali...")
-                time.sleep(4.0)
+                print("[SISTEM] Mengkalibrasi ulang latar belakang...")
+                # Kosongkan sisa frame di buffer akibat penundaan servo tadi
+                for _ in range(15): 
+                    cap.read()
                 
-                # Reset background pasca-eksekusi agar tidak mendeteksi sisa gerakan
-                for _ in range(5): cap.read()
                 ret, reset_frame = cap.read()
                 if ret:
                     gray_background = cv2.cvtColor(reset_frame, cv2.COLOR_BGR2GRAY)
@@ -167,11 +182,13 @@ try:
             else:
                 print("[INFO] Gerakan terdeteksi tapi YOLO tidak menemukan objek valid.\n")
 
-        # Batasi loop idle agar tidak memakan spin-lock CPU
         time.sleep(0.03)
 
 except KeyboardInterrupt:
     print("\n[ZEUS] Mematikan sistem headless.")
 finally:
     cap.release()
+    if ser is not None:
+        ser.close()
+        print("[SERIAL] Koneksi dihentikan.")
     print("[ZEUS] Selesai.")
