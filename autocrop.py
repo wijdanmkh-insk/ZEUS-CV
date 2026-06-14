@@ -149,7 +149,6 @@ try:
                 target_cluster = CLUSTER_MAPPING.get(search_key, "UNKNOWN")
 
                 print("-" * 50)
-                print(f"OBJEK TERDETEKSI : {detected_object_name.upper()}")
                 print(f"KLUSTER SAMPAH   : {target_cluster}")
                 print("-" * 50)
 
