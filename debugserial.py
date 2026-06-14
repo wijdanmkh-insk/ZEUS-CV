@@ -3,7 +3,7 @@ import time
 
 # --- KONFIGURASI ---
 # Ganti 'COM3' sesuai dengan port ESP32 kamu (di Mac/Linux biasanya '/dev/ttyUSB0' atau '/dev/ttyACM0')
-SERIAL_PORT = 'COM3' 
+SERIAL_PORT = '/dev/ttyUSB0' 
 BAUD_RATE = 115200
 
 try:
