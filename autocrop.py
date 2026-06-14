@@ -174,7 +174,8 @@ try:
                 if ret:
                     gray_background = cv2.cvtColor(reset_frame, cv2.COLOR_BGR2GRAY)
                     gray_background = cv2.GaussianBlur(gray_background, (21, 21), 0)
-                
+                    
+                os.system('clear' if os.name != 'nt' else 'cls')
                 print("\n=== SISTEM READY (IDLE MODE) ===")
             else:
                 print("[INFO] Gerakan terdeteksi tapi YOLO tidak menemukan objek valid.\n")
