@@ -2,7 +2,7 @@ import time
 import cv2
 import torch
 import torchvision.transforms as transforms
-import serial  # Library untuk komunikasi UART/Serial
+import serial  
 from ultralytics import YOLO
 
 # ==============================================================================
@@ -12,8 +12,6 @@ CAMERA_INDEX = 1
 YOLO_MODEL_PATH = 'yolov8n.pt'
 CLASSIFIER_MODEL_PATH = 'V1_deploy.pt'
 
-# Konfigurasi Port Serial (Sesuaikan dengan port ESP32 di Raspberry Pi kamu)
-# Di Linux/Pi biasanya terdeteksi sebagai '/dev/ttyUSB0' atau '/dev/ttyACM0'
 SERIAL_PORT = '/dev/ttyUSB0' 
 BAUD_RATE = 115200
 
@@ -22,18 +20,18 @@ CLASS_NAMES = {
     5: "Hazardous", 6: "Metal", 7: "Paper", 8: "Plastic", 9: "Textile Trash"
 }
 
-# --- PEMETAAN KLUSTER SAMPAH ---
+# --- PEMETAAN KLUSTER SAMPAH (Key dipastikan sesuai dengan teks di CLASS_NAMES) ---
 CLUSTER_MAPPING = {
-    "Cardboard": "PAPER",
-    "Paper": "PAPER",
-    "Plastic": "ANORGANIC",
-    "Textile Trash": "ANORGANIC",
-    "Hazardous": "HAZARD",
-    "Glass": "HAZARD",
-    "Ewaste": "HAZARD",
-    "Metal": "HAZARD",
-    "Food Organics": "ORGANIC",
-    "Background": "UNKNOWN"
+    "background": "UNKNOWN",
+    "cardboard": "PAPER",
+    "paper": "PAPER",
+    "plastic": "ANORGANIC",
+    "textile trash": "ANORGANIC",
+    "hazardous": "HAZARD",
+    "glass": "HAZARD",
+    "ewaste": "HAZARD",
+    "metal": "HAZARD",
+    "food organics": "ORGANIC"
 }
 
 MOTION_THRESHOLD = 10000  
@@ -44,10 +42,9 @@ MOTION_THRESHOLD = 10000
 print("[ZEUS] Menginisialisasi sistem headless dengan Serial...")
 device = torch.device('cpu')
 
-# Inisialisasi koneksi Serial ke ESP32
 try:
     ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
-    time.sleep(2)  # Jeda 2 detik agar koneksi serial dengan ESP32 stabil pasca-reset
+    time.sleep(2)  
     print(f"[SERIAL] Berhasil terhubung ke ESP32 via {SERIAL_PORT}")
 except Exception as e:
     print(f"[SERIAL ERROR] Gagal membuka port {SERIAL_PORT}: {e}")
@@ -119,7 +116,6 @@ try:
 
             h_f, w_f, _ = capture_frame.shape
 
-            # Run YOLO
             print("[AI EXEC] Menjalankan YOLOv8 Localizer...")
             yolo_results = yolo_model(capture_frame, verbose=False)[0]
             
@@ -136,7 +132,6 @@ try:
                     max_area = area
                     best_box = (x1, y1, x2, y2)
 
-            # Run Classifier jika objek ditemukan oleh YOLO
             if best_box is not None:
                 x1, y1, x2, y2 = best_box
                 cropped_object = capture_frame[y1:y2, x1:x2]
@@ -149,8 +144,9 @@ try:
                 _, predicted = torch.max(output, 1)
                 detected_object_name = CLASS_NAMES.get(predicted.item(), "Background")
                 
-                # --- PROSES EVALUASI KLUSTER ---
-                target_cluster = CLUSTER_MAPPING.get(detected_object_name, "UNKNOWN")
+                # --- PERBAIKAN: Paksa cari dengan huruf kecil agar selalu cocok ---
+                search_key = detected_object_name.lower().strip()
+                target_cluster = CLUSTER_MAPPING.get(search_key, "UNKNOWN")
 
                 print("-" * 50)
                 print(f"OBJEK TERDETEKSI : {detected_object_name.upper()}")
@@ -159,17 +155,17 @@ try:
 
                 # --- KIRIM PERINTAH SERIAL KE ESP32 ---
                 if ser is not None and target_cluster != "UNKNOWN":
-                    # Menambahkan karakter '\n' (newline) sebagai pembatas akhir data di ESP32
                     command_string = f"{target_cluster}\n"
                     ser.write(command_string.encode('utf-8'))
-                    print(f"[SERIAL] Mengirim data ke ESP32 -> {command_string.strip()}")
+                    print(f"[SERIAL] -> TERKIRIM KE ESP32: {command_string.strip()}")
 
-                    # --- COOLDOWN SYSTEM (5 DETIK KONTROL SERVO) ---
+                    # --- COOLDOWN SYSTEM (Masuk ke dalam kondisi jika serial terkirim) ---
                     print(f"[SISTEM] Kamera dinonaktifkan sementara selama 5 detik untuk pergerakan mekanik...")
                     time.sleep(5.0)
+                else:
+                    print("[SERIAL] Perintah tidak dikirim karena kluster UNKNOWN atau port terputus.")
                 
                 print("[SISTEM] Mengkalibrasi ulang latar belakang...")
-                # Kosongkan sisa frame di buffer akibat penundaan servo tadi
                 for _ in range(15): 
                     cap.read()
                 
