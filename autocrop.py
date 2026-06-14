@@ -1,3 +1,4 @@
+import os
 import time
 import cv2
 import torch
@@ -80,6 +81,7 @@ else:
     print("[ERROR] Gagal mengambil frame awal kamera.")
     exit()
 
+os.system('clear' if os.name != 'nt' else 'cls')
 print("\n=== SISTEM ZEUS READY (HEADLESS IDLE MODE) ===")
 print("Menunggu objek dijatuhkan ke dalam tempat sampah...\n")
 
